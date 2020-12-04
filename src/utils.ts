@@ -94,10 +94,7 @@ export function async_process(argv: Array<string>, input = null, cancellable = n
     if (input !== null)
         flags |= Gio.SubprocessFlags.STDIN_PIPE;
 
-    let proc = new Gio.Subprocess({
-        argv: argv,
-        flags: flags
-    });
+    let proc = new Gio.Subprocess({ argv, flags });
     proc.init(cancellable);
 
     return new Promise((resolve, reject) => {
@@ -110,4 +107,63 @@ export function async_process(argv: Array<string>, input = null, cancellable = n
             }
         });
     });
+}
+
+export type AsyncIPC = {
+    stdout: any,
+    stdin: any,
+}
+
+export function async_process_ipc(argv: Array<string>): AsyncIPC | null {
+    let [, pid, stdin_pipe, stdout_pipe, stderr_pipe] = GLib.spawn_async_with_pipes(
+        null,
+        argv,
+        null,
+        GLib.SpawnFlags.SEARCH_PATH | GLib.SpawnFlags.DO_NOT_REAP_CHILD,
+        null
+    )
+
+    let stderr = new Gio.DataInputStream({
+        base_stream: new Gio.UnixInputStream({
+            fd: stderr_pipe,
+            close_fd: true
+        }),
+        close_base_stream: true
+    })
+
+    stderr.read_line_async(0, null, (stream: any, res: any) => {
+        try {
+            let line = stream.read_line_finish_utf8(res)[0]
+            if (line) {
+                global.log(`ERR: ${line}`)
+            }
+        } catch (e) {
+            global.log(`ERR CATCH: ${e}`)
+        }
+    })
+
+    let stdin = new Gio.DataOutputStream({
+        base_stream: new Gio.UnixOutputStream({
+            fd: stdin_pipe,
+            close_fd: true
+        }),
+        close_base_stream: true
+    })
+
+    let stdout = new Gio.DataInputStream({
+        base_stream: new Gio.UnixInputStream({
+            fd: stdout_pipe,
+            close_fd: true
+        }),
+        close_base_stream: true
+    })
+
+    GLib.child_watch_add(GLib.PRIORITY_DEFAULT_IDLE, pid, (pid: number, status: any) => {
+        global.log(`closing ${pid}: ${status}`)
+        stdin.close(null)
+        stdout.close(null)
+        GLib.spawn_close_pid(pid)
+    })
+
+    return { stdin, stdout }
 }
